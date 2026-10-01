@@ -18,6 +18,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from . import __version__
 from .classify import ROLE_LABELS, Role, h2_lead_len, h3_lead_len
+from .extract import extract
 from .fonts import installed_fonts, missing_fonts
 from .render import read_document, render
 from .spec import DEFAULT_TEXT, DISPLAY_ROLES, describe, fonts_used, parse
@@ -33,6 +34,7 @@ YELLOW, GREEN, WHITE, GREY = "#fff4c2", "#e3f4e1", "#ffffff", "#6b6b6b"
 
 HINT_SHORT = "每行写一类段落：先写类型，再写格式。例：一级标题（黑体，三号，顶格）"
 HINT_FULL = (
+    "也可以点“从模板读取…”，选一份已经排好版的公文，程序会自动写出它的格式要求。\n\n"
     "每行写一类段落，先写类型，再写格式。\n\n"
     "类型：标题、副标题、一级标题、二级标题、三级标题、正文、附件、附件名称、落款、日期\n\n"
     "格式：字体（仿宋_GB2312、黑体……）、字号（三号、小四、16磅）、加粗、"
@@ -180,8 +182,9 @@ class App(tk.Tk):
         head.grid(row=0, column=0, sticky="ew")
         head.columnconfigure(1, weight=1)
         ttk.Label(head, text="① 格式要求", style="Step.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Button(head, text="从模板读取…", command=self._read_template).grid(row=0, column=2, sticky="e")
         ttk.Button(head, text="写法说明", command=lambda: messagebox.showinfo("格式要求的写法", HINT_FULL)
-                   ).grid(row=0, column=2, sticky="e")
+                   ).grid(row=0, column=3, sticky="e", padx=(6, 0))
         hint = ttk.Label(left, text=HINT_SHORT, style="Hint.TLabel")
         hint.grid(row=1, column=0, sticky="ew", pady=(2, 6))
         auto_wrap(hint)
@@ -202,8 +205,7 @@ class App(tk.Tk):
         btns = ttk.Frame(left)
         btns.grid(row=3, column=0, sticky="w", pady=6)
         ttk.Button(btns, text="恢复默认要求", command=self._reset_requirements).pack(side="left")
-        ttk.Button(btns, text="导入…", command=self._import_requirements).pack(side="left", padx=6)
-        ttk.Button(btns, text="另存…", command=self._export_requirements).pack(side="left")
+        ttk.Button(btns, text="另存txt…", command=self._export_requirements).pack(side="left", padx=6)
 
         self.spec_msg = ttk.Label(left, style="Warn.TLabel")
         self.spec_msg.grid(row=4, column=0, sticky="ew")
@@ -326,27 +328,31 @@ class App(tk.Tk):
         t.start()
         poll()
 
+    def _read_template(self):
+        """选一份已经排好版的公文，把它的格式写成要求文字填进输入框，供核对修改。"""
+        path = filedialog.askopenfilename(title="选择一份已经排好版的公文（模板）",
+                                          filetypes=[("Word 文档", "*.docx")])
+        if not path:
+            return
+        try:
+            result = extract(path)
+        except Exception as e:
+            messagebox.showerror(APP_NAME, f"读取模板失败：{e}")
+            return
+        current = self._req().strip()
+        if current and current != DEFAULT_TEXT.strip() and not messagebox.askyesno(
+                APP_NAME, "用模板的格式替换输入框里现在的要求吗？\n（想保留现在的要求，可以先点“另存txt…”）"):
+            return
+        self.req_text.delete("1.0", "end")
+        self.req_text.insert("1.0", result.text)
+        messagebox.showinfo(APP_NAME, f"已从模板读取 {len(result.found)} 类段落的格式，填进了“格式要求”。\n\n"
+                            "以 # 开头的行是说明，不影响排版。请对照下方“程序理解的格式”核对一遍，"
+                            "需要的话直接在输入框里改。")
+
     def _reset_requirements(self):
         if messagebox.askyesno(APP_NAME, "恢复成默认格式要求（规范图片）？当前内容会被覆盖。"):
             self.req_text.delete("1.0", "end")
             self.req_text.insert("1.0", DEFAULT_TEXT)
-
-    def _import_requirements(self):
-        path = filedialog.askopenfilename(filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")])
-        if not path:
-            return
-        data = Path(path).read_bytes()
-        for enc in ("utf-8-sig", "gbk"):  # 记事本在中文 Windows 上常存成 GBK
-            try:
-                text = data.decode(enc)
-                break
-            except UnicodeDecodeError:
-                continue
-        else:
-            messagebox.showerror(APP_NAME, "无法读取这个文件的编码。")
-            return
-        self.req_text.delete("1.0", "end")
-        self.req_text.insert("1.0", text)
 
     def _export_requirements(self):
         path = filedialog.asksaveasfilename(defaultextension=".txt", initialfile="格式要求.txt",

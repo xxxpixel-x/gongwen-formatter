@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gongwen-formatter"
-version = "0.3.0"
+version = "0.4.0"
 description = "按输入的格式要求给 Word 公文自动排版"
 readme = "README.md"
 requires-python = ">=3.10"
