@@ -1,0 +1,13 @@
+# 真实工作文件不进仓库
+tests/fixtures/_private*
+*_已排版.docx
+~$*.docx
+
+__pycache__/
+*.egg-info/
+.venv/
+build/
+dist/
+.pytest_cache/
+packaging/ChineseSimplified.isl
+*.spec
