@@ -31,8 +31,19 @@ def test_free_style_and_inheritance():
     b, t = s.styles[Role.BODY], s.styles[Role.TITLE]
     assert (b.font, b.size, b.line, b.line_multiple) == ("宋体", 12, None, 1.5)
     assert (t.font, t.size, t.bold, t.align) == ("黑体", 18, True, "center")
-    # 没写的一级标题沿用正文字体、字号
-    assert (s.styles[Role.H1].font, s.styles[Role.H1].size) == ("宋体", 12)
+    # 没写的一级标题仍按规范图片（黑体三号），但继承正文的行距
+    h1 = s.styles[Role.H1]
+    assert (h1.font, h1.size, h1.line, h1.line_multiple) == ("黑体", 16, None, 1.5)
+
+
+def test_partial_requirements_keep_defaults():
+    """只写了部分类型时，标题、正文、一级标题仍按规范图片。"""
+    s = parse("日期（楷体_GB2312，三号，右对齐，右缩进1字符）\n英文、数字TimesNewRoman")
+    assert s.problems == []
+    assert (s.styles[Role.TITLE].font, s.styles[Role.TITLE].size) == ("方正小标宋_GBK", 22)
+    assert s.styles[Role.BODY].first_indent == 2
+    assert s.styles[Role.H1].font == "黑体"
+    assert s.styles[Role.DATE].font == "楷体_GB2312"
 
 
 def test_reports_what_it_cannot_understand():

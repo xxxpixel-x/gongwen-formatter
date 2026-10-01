@@ -9,7 +9,7 @@ python -m pytest -q || goto :error
 python -m PyInstaller --noconfirm --clean --windowed --name GongwenFormatter --paths src app.py || goto :error
 
 if not exist packaging\ChineseSimplified.isl (
-  curl -L -o packaging\ChineseSimplified.isl https://raw.githubusercontent.com/jrsoftware/issrc/is-6_4_3/Files/Languages/Unofficial/
+  curl -L -o packaging\ChineseSimplified.isl https://raw.githubusercontent.com/jrsoftware/issrc/is-6_4_3/Files/Languages/Unofficial/ChineseSimplified.isl
 )
 set ISCC="%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
 if exist %ISCC% (

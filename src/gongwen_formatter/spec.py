@@ -8,8 +8,8 @@
     英文、数字：Times New Roman
     页边距：上37毫米，下35毫米，左28毫米，右26毫米
 
-冒号或括号前面是“段落类型”，后面是格式。没写的项沿用默认值
-（默认值就是规范图片里的要求）。看不懂的片段会原样报告出来，
+冒号或括号前面是“段落类型”，后面是格式。没写的段落类型和没写的项
+都沿用默认要求（规范图片），正文的行距会被其他段落继承。看不懂的片段会原样报告出来，
 不会悄悄忽略。
 """
 from __future__ import annotations
@@ -143,7 +143,11 @@ def _parse_attrs(text: str, st: Style, problems: list[str], where: str) -> None:
         problems.append(f"{where}：没看懂“{leftover}”")
 
 
-def parse(text: str) -> Spec:
+def parse(text: str, with_defaults: bool = True) -> Spec:
+    """with_defaults=True：先套用默认要求（规范图片），再用用户写的内容逐项覆盖。
+    这样用户只写了几行时，没写到的段落类型仍然按规范图片排，而不是退回到仿宋三号。"""
+    if with_defaults and text is not DEFAULT_TEXT:
+        text = DEFAULT_TEXT + "\n" + text
     base = Style()
     spec = Spec(styles={})
     problems = spec.problems

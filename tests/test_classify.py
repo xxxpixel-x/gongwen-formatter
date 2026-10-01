@@ -38,3 +38,9 @@ def test_h3_bold_lead():
 def test_h2_inline_body():
     it = classify(["标题", "（一）工作目标。今年完成三项任务。"])[1]
     assert it.text[: it.lead_len] == "（一）工作目标。"
+
+
+def test_inner_spaces_removed():
+    from gongwen_formatter.classify import clean
+    assert clean("　　金融与统   计学院，2026 年") == "金融与统计学院，2026 年"
+    assert clean("Times New Roman 字体") == "Times New Roman 字体"

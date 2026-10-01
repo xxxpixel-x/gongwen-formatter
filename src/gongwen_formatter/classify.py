@@ -67,9 +67,15 @@ class Item:
         return ROLE_LABELS[self.role]
 
 
+# 两个中文字符（含中文标点）之间夹着的空格几乎都是误输入，例如“金融与统   计学院”
+_CJK = r"\u3000-\u303f\u4e00-\u9fff\uff00-\uffef“”‘’—…·"
+_INNER_SPACES = re.compile(rf"(?<=[{_CJK}])[ \t\u3000\xa0]+(?=[{_CJK}])")
+
+
 def clean(text: str) -> str:
-    """去掉首尾空格（含全角空格）——缩进由模板负责，不靠空格。"""
-    return text.strip(SPACES + "\r\n")
+    """去掉首尾空格（含全角空格）和中文之间多余的空格——缩进由格式负责，不靠空格。"""
+    text = text.strip(SPACES + "\r\n")
+    return _INNER_SPACES.sub("", text)
 
 
 def _short_heading_like(text: str, limit: int = 15) -> bool:
