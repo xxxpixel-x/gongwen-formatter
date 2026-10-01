@@ -20,6 +20,11 @@ OutputBaseFilename=公文格式整理器-安装包-{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; Inno Setup 6 默认会跳过“欢迎页”，而且装过一次后会跳过“选择安装位置”页。这里强制都显示
+DisableWelcomePage=no
+DisableDirPage=no
+DisableProgramGroupPage=yes
+DisableReadyPage=no
 UninstallDisplayIcon={app}\GongwenFormatter.exe
 SetupIconFile=icon.ico
 
