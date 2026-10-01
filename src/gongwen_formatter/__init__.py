@@ -3,7 +3,7 @@ from .classify import Item, Role, ROLE_LABELS, classify
 from .spec import DEFAULT_TEXT, Spec, Style, parse
 from .render import read_document, render
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 
 
 def format_file(src: str, out: str, requirements: str = DEFAULT_TEXT):

@@ -61,6 +61,7 @@ class Item:
     confidence: str = "high"
     note: str = ""
     raw: object = field(default=None, repr=False)  # 表格等无需识别的原始 XML
+    confirmed: bool = True       # 界面里：低置信度段落在用户确认前为 False
 
     @property
     def label(self) -> str:

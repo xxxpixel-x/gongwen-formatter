@@ -21,6 +21,7 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\GongwenFormatter.exe
+SetupIconFile=icon.ico
 
 [Languages]
 #if FileExists(AddBackslash(SourcePath) + "ChineseSimplified.isl")
@@ -29,16 +30,14 @@ Name: "zh"; MessagesFile: "ChineseSimplified.isl"
 Name: "en"; MessagesFile: "compiler:Default.isl"
 #endif
 
-[Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
-
 [Files]
 Source: "..\dist\GongwenFormatter\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\公文格式整理器"; Filename: "{app}\GongwenFormatter.exe"
 Name: "{group}\卸载 公文格式整理器"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\公文格式整理器"; Filename: "{app}\GongwenFormatter.exe"; Tasks: desktopicon
+; 桌面快捷方式：安装时总是创建
+Name: "{autodesktop}\公文格式整理器"; Filename: "{app}\GongwenFormatter.exe"
 
 [Run]
 Filename: "{app}\GongwenFormatter.exe"; Description: "{cm:LaunchProgram,公文格式整理器}"; Flags: nowait postinstall skipifsilent

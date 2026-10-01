@@ -27,7 +27,7 @@ jobs:
           python -m pytest -q
 
       - name: PyInstaller 打包
-        run: python -m PyInstaller --noconfirm --clean --windowed --name GongwenFormatter --paths src app.py
+        run: python -m PyInstaller --noconfirm --clean --windowed --name GongwenFormatter --icon packaging/icon.ico --paths src app.py
 
       - name: 计算版本号
         id: ver
