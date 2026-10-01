@@ -39,7 +39,12 @@ jobs:
         shell: pwsh
         run: |
           if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseSimplified.isl" -OutFile packaging\ChineseSimplified.isl
+          # 中文安装向导语言包；下载失败也不影响打包，只是安装向导变成英文
+          try {
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/jrsoftware/issrc/is-6_4_3/Files/Languages/Unofficial/ChineseSimplified.isl" -OutFile packaging\ChineseSimplified.isl
+          } catch {
+            Write-Warning "中文语言包下载失败，安装向导将使用英文：$_"
+          }
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.ver.outputs.v }}" packaging\installer.iss
           Compress-Archive -Path dist\GongwenFormatter\* -DestinationPath "dist\公文格式整理器-免安装版-${{ steps.ver.outputs.v }}.zip"
 
