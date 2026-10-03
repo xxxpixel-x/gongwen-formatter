@@ -51,3 +51,28 @@ def test_reports_what_it_cannot_understand():
     assert any("蓝色" in p for p in s.problems)
     assert any("随便写一行" in p for p in s.problems)
     assert s.styles[Role.H1].font == "楷体" and s.styles[Role.H1].size == 14
+
+
+def test_meeting_record_requirements():
+    """会议记录规范：页眉页脚、厘米、28.8 磅、四五级标题。"""
+    s = parse("标题（方正小标宋简体，二号，居中，行距固定值35磅）\n"
+              "正文（方正仿宋_GB2312，三号，首行缩进2字符，段前0行，段后0行，行距固定值28.8磅）\n"
+              "一级标题（黑体，三号，左对齐，顶格）\n二级标题（楷体_GB2312，三号，不加粗）\n"
+              "三级标题（方正仿宋_GB2312，三号，加粗）\n四级标题（方正仿宋_GB2312，三号）\n"
+              "英文、数字：Times New Roman\n"
+              "页边距：上 3.7cm、下 3.5cm、左 2.8cm、右 2.6cm\n页眉 1.5cm，页脚 2.8cm")
+    assert s.problems == []
+    assert s.margins_mm == (37, 35, 28, 26)
+    assert (s.header_mm, s.footer_mm) == (15, 28)
+    assert s.styles[Role.TITLE].line == 35 and s.styles[Role.H1].line == 28.8
+    assert s.styles[Role.H2].bold is False
+    assert s.styles[Role.H4].font == "方正仿宋_GB2312"
+    assert s.styles[Role.H5].font == "方正仿宋_GB2312"   # 没写的五级标题跟正文一样
+
+
+def test_header_footer_variants():
+    s = parse("页边距：上37毫米，下35毫米，左28毫米，右26毫米，页眉15毫米，页脚28毫米")
+    assert s.problems == [] and (s.header_mm, s.footer_mm) == (15, 28)
+    s = parse("页眉页脚：页眉距边界1.5厘米，页脚距边界2.8厘米")
+    assert s.problems == [] and (s.header_mm, s.footer_mm) == (15, 28)
+    assert parse("").header_mm is None

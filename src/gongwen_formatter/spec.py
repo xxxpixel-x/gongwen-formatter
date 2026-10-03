@@ -7,6 +7,7 @@
     一级标题：黑体 三号 顶格
     英文、数字：Times New Roman
     页边距：上37毫米，下35毫米，左28毫米，右26毫米
+    页眉1.5厘米，页脚2.8厘米
 
 冒号或括号前面是“段落类型”，后面是格式。没写的段落类型和没写的项
 都沿用默认要求（规范图片），正文的行距会被其他段落继承。看不懂的片段会原样报告出来，
@@ -42,6 +43,8 @@ class Spec:
     styles: dict[Role, Style]
     latin_font: str = "Times New Roman"
     margins_mm: tuple[float, float, float, float] = (37, 35, 28, 26)  # 上 下 左 右
+    header_mm: float | None = None    # 页眉距边界；None 表示不设置（Word 默认 12.7 毫米）
+    footer_mm: float | None = None    # 页脚距边界
     problems: list[str] = field(default_factory=list)  # 没看懂的片段
 
 
@@ -59,6 +62,7 @@ ALIGN_LABELS = {"both": "两端对齐", "center": "居中", "left": "左对齐",
 # 段落类型的各种叫法 → Role。长的写在前面，避免“标题”抢先匹配“一级标题”
 ROLE_NAMES = [
     ("一级标题", Role.H1), ("二级标题", Role.H2), ("三级标题", Role.H3),
+    ("四级标题", Role.H4), ("五级标题", Role.H5),
     ("副标题", Role.SUBTITLE), ("大标题", Role.TITLE), ("主标题", Role.TITLE),
     ("文件标题", Role.TITLE), ("标题", Role.TITLE),
     ("附件名称", Role.ATTACH_ITEM), ("附件说明", Role.ATTACH_LABEL), ("附件", Role.ATTACH_LABEL),
@@ -95,6 +99,12 @@ LATIN_RE = re.compile(
     r"\s*(?:用|使用|为|采用|：|:)?\s*([A-Za-z][A-Za-z ]*[A-Za-z])"
 )
 NUM = r"(\d+(?:\.\d+)?)"
+LENGTH = NUM + r"\s*(毫米|mm|厘米|cm)"
+
+
+def _mm(m: re.Match) -> float:
+    """“3.7厘米” → 37 毫米。"""
+    return float(m.group(1)) * (10 if m.group(2) in ("厘米", "cm") else 1)
 
 
 def _line_height(st: Style) -> float:
@@ -168,13 +178,23 @@ def parse(text: str, with_defaults: bool = True) -> Spec:
             if re.fullmatch(r"[，,、；;：:（）()\s]*", line):
                 continue
 
+        # 页眉、页脚距边界（可以单独一行，也可以写在页边距那一行里）
+        found = False
+        for key, attr in (("页眉", "header_mm"), ("页脚", "footer_mm")):
+            m = re.search(key + r"(?:距边界|距离|边距)?\s*(?:为|：|:)?\s*" + LENGTH, line)
+            if m:
+                setattr(spec, attr, _mm(m))
+                line = line[: m.start()] + line[m.end():]
+                found = True
+        if found and re.fullmatch(r"(?:页眉页脚|页眉|页脚|[，,、；;：:（）()\s])*", line):
+            continue
+
         if line.startswith("页边距"):
             for key, idx in (("上", 0), ("下", 1), ("左", 2), ("右", 3)):
-                mm = re.search(key + r"\s*" + NUM + r"\s*(毫米|mm|厘米|cm)", line)
+                mm = re.search(key + r"\s*" + LENGTH, line)
                 if mm:
-                    v = float(mm.group(1)) * (10 if mm.group(2) in ("厘米", "cm") else 1)
                     margins = list(spec.margins_mm)
-                    margins[idx] = v
+                    margins[idx] = _mm(mm)
                     spec.margins_mm = tuple(margins)
             continue
 
@@ -233,7 +253,7 @@ def describe(st: Style) -> dict[str, str]:
     }
 
 
-DISPLAY_ROLES = [Role.TITLE, Role.SUBTITLE, Role.H1, Role.H2, Role.H3, Role.BODY,
+DISPLAY_ROLES = [Role.TITLE, Role.SUBTITLE, Role.H1, Role.H2, Role.H3, Role.H4, Role.H5, Role.BODY,
                  Role.ATTACH_LABEL, Role.ATTACH_ITEM, Role.SIGNATURE, Role.DATE]
 
 

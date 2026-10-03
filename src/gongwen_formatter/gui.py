@@ -17,7 +17,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import __version__
-from .classify import ROLE_LABELS, Role, h2_lead_len, h3_lead_len
+from .classify import ROLE_LABELS, lead_len
 from .extract import extract
 from .fonts import installed_fonts, missing_fonts
 from .render import read_document, render
@@ -36,11 +36,13 @@ HINT_SHORT = "每行写一类段落：先写类型，再写格式。例：一级
 HINT_FULL = (
     "也可以点“从模板读取…”，选一份已经排好版的公文，程序会自动写出它的格式要求。\n\n"
     "每行写一类段落，先写类型，再写格式。\n\n"
-    "类型：标题、副标题、一级标题、二级标题、三级标题、正文、附件、附件名称、落款、日期\n\n"
+    "类型：标题、副标题、一级标题、二级标题、三级标题、四级标题、五级标题、正文、附件、附件名称、落款、日期\n"
+    "（编号依次为 一、→（一）→1.→（1）→1）；四、五级标题没写时与正文相同）\n\n"
     "格式：字体（仿宋_GB2312、黑体……）、字号（三号、小四、16磅）、加粗、"
     "对齐（居中、两端对齐、右对齐）、缩进（首行缩进2字符、顶格、右缩进1字符）、"
     "行距（行距固定值28磅、1.5倍行距）、段前段后（段前0.5行）\n\n"
-    "另外还可以写：\n英文、数字：Times New Roman\n页边距：上37毫米，下35毫米，左28毫米，右26毫米\n\n"
+    "另外还可以写：\n英文、数字：Times New Roman\n页边距：上37毫米，下35毫米，左28毫米，右26毫米\n"
+    "页眉1.5厘米，页脚2.8厘米\n\n"
     "没写到的内容按默认要求（规范图片）处理。"
 )
 
@@ -292,6 +294,10 @@ class App(tk.Tk):
         t, b, l, r = self.spec.margins_mm
         self.spec_tree.insert("", "end", text="页边距",
                               values=[f"上{t:g} 下{b:g}", "", "", "", f"左{l:g} 右{r:g}（毫米）", ""])
+        h, f = self.spec.header_mm, self.spec.footer_mm
+        self.spec_tree.insert("", "end", text="页眉页脚", values=[
+            f"页眉{h:g}" if h is not None else "页眉默认", "", "", "",
+            f"页脚{f:g}（毫米）" if f is not None else "页脚默认", ""])
         self._update_spec_msg()
         self._save_requirements()
 
@@ -448,8 +454,7 @@ class App(tk.Tk):
         def confirm(label):
             role = LABEL_TO_ROLE[label]
             item.role = role
-            item.lead_len = (h3_lead_len(item.text) if role == Role.H3
-                             else h2_lead_len(item.text) if role == Role.H2 else 0)
+            item.lead_len = lead_len(role, item.text)
             item.confirmed = True
             if item.confidence == "low":
                 paint(GREEN)

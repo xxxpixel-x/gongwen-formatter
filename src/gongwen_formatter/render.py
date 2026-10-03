@@ -15,7 +15,7 @@ from docx.oxml.ns import qn
 from docx.text.paragraph import Paragraph
 from lxml import etree
 
-from .classify import Item, Role, classify, clean, insert_blanks
+from .classify import Item, Role, check_numbering, classify, clean, insert_blanks
 from .spec import Spec, Style
 
 
@@ -57,6 +57,7 @@ def read_document(path: str) -> ReadResult:
             items.append(next(classified))
         else:
             items.append(Item(Role.BODY, "[表格]", raw=s, note="表格原样保留"))
+    warnings += check_numbering(items)
     return ReadResult(items, warnings)
 
 
@@ -126,7 +127,7 @@ def _paragraph(item: Item, spec: Spec):
     p.append(_ppr(st))
     if not item.text:
         return p
-    lead = item.lead_len if item.role in (Role.H2, Role.H3) else 0
+    lead = item.lead_len if item.role in (Role.H2, Role.H3, Role.H4, Role.H5) else 0
     if 0 < lead < len(item.text):
         # “1. 小标题：正文……”：前半段用标题格式，后半段用正文格式
         p.append(_run(item.text[:lead], _rpr(st, spec.latin_font, st.bold)))
@@ -143,6 +144,10 @@ def _setup_document(spec: Spec) -> Document:
     top, bottom, left, right = spec.margins_mm
     sec.top_margin, sec.bottom_margin = Mm(top), Mm(bottom)
     sec.left_margin, sec.right_margin = Mm(left), Mm(right)
+    if spec.header_mm is not None:
+        sec.header_distance = Mm(spec.header_mm)
+    if spec.footer_mm is not None:
+        sec.footer_distance = Mm(spec.footer_mm)
 
     # 默认样式也改掉，避免空段落、表格沿用 Calibri / 段后 8 磅
     body = spec.styles[Role.BODY]

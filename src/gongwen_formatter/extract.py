@@ -22,10 +22,13 @@ from .spec import ALIGN_LABELS, PT_TO_NAME
 # 输出时每类段落用的名字（必须是 spec.ROLE_NAMES 认识的写法）
 ROLE_WORDS = {
     Role.TITLE: "标题", Role.SUBTITLE: "副标题", Role.H1: "一级标题", Role.H2: "二级标题",
-    Role.H3: "三级标题", Role.BODY: "正文", Role.ATTACH_LABEL: "附件",
+    Role.H3: "三级标题", Role.H4: "四级标题", Role.H5: "五级标题", Role.BODY: "正文", Role.ATTACH_LABEL: "附件",
     Role.ATTACH_ITEM: "附件名称", Role.SIGNATURE: "落款", Role.DATE: "日期",
 }
 ORDER = list(ROLE_WORDS)
+# 模板里没有时不用提醒：没写的四、五级标题本来就和正文一样
+QUIET = {Role.H4, Role.H5}
+NUMBERED = (Role.H3, Role.H4, Role.H5)   # 只加粗编号到冒号的部分
 # 模板里缺少某类段落时，从正文格式推算（与规范图片一致的习惯做法）
 DERIVE = {
     Role.SUBTITLE: dict(align="center", indent=0.0, bold=False),
@@ -188,7 +191,7 @@ def _describe(look: Look, role: Role) -> str:
     if look.font:
         parts.append(look.font)
     parts.append(_size_text(look.size))
-    if role == Role.H3 or look.bold:  # 三级标题始终写明是否加粗（只作用于冒号前）
+    if role in NUMBERED or look.bold:  # 三~五级标题始终写明是否加粗（只作用于冒号前）
         parts.append("加粗" if look.bold else "不加粗")
     parts.append(ALIGN_LABELS[look.align])
     parts.append(f"首行缩进{look.indent:g}字符" if look.indent else "顶格")
@@ -253,7 +256,7 @@ def extract(path: str) -> Extracted:
     derived, defaulted = [], []
     body = looks[Role.BODY].most_common(1)[0][0] if Role.BODY in looks else None
     for role in ORDER:
-        if role in looks:
+        if role in looks or role in QUIET:
             continue
         if body is not None and role in DERIVE:
             by_role[role] = _describe(replace(body, **DERIVE[role]), role)
@@ -278,6 +281,8 @@ def extract(path: str) -> Extracted:
           if v is not None]
     if len(mm) == 4:
         lines.append(f"页边距：上{mm[0]}毫米，下{mm[1]}毫米，左{mm[2]}毫米，右{mm[3]}毫米")
+    if sect.header_distance is not None and sect.footer_distance is not None:
+        lines.append(f"页眉{round(sect.header_distance.mm, 1):g}毫米，页脚{round(sect.footer_distance.mm, 1):g}毫米")
 
     header = [f"# 以下格式读取自模板《{Path(path).name}》，请核对后再排版"]
     header += [f"# {n}" for n in notes]

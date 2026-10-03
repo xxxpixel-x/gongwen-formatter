@@ -44,3 +44,35 @@ def test_inner_spaces_removed():
     from gongwen_formatter.classify import clean
     assert clean("　　金融与统   计学院，2026 年") == "金融与统计学院，2026 年"
     assert clean("Times New Roman 字体") == "Times New Roman 字体"
+
+
+def test_level4_level5():
+    items = classify(["标题", "一、总体要求", "（一）工作目标", "1.组织：成立小组。",
+                      "（1）人员安排：由办公室负责。", "1）报名", "具体内容。"])
+    assert [it.role for it in items[1:]] == [Role.H1, Role.H2, Role.H3, Role.H4, Role.H5, Role.BODY]
+    h4 = items[4]
+    assert h4.text[: h4.lead_len] == "（1）人员安排："
+
+
+def test_decimal_is_not_heading():
+    assert classify(["标题", "3.5万元用于采购设备。"])[1].role == Role.BODY
+
+
+def test_numbering_normalized():
+    from gongwen_formatter.classify import check_numbering
+    items = classify(["标题", "一.总体", "(一)、目标", "1、组织", "(1)人员", "1)报名", "正文。"])
+    assert [it.text for it in items[1:6]] == ["一、总体", "（一）目标", "1.组织", "（1）人员", "1）报名"]
+    msgs = check_numbering(items)
+    assert len(msgs) == 1 and "“1、”→“1.”" in msgs[0]
+
+
+def test_numbering_problems():
+    from gongwen_formatter.classify import check_numbering
+    items = classify(["标题", "一、总体", "1.组织", "2.分工", "三、保障", "（一）经费", "（三）场地", "正文。"])
+    msgs = check_numbering(items)
+    assert len(msgs) == 3
+    assert "第 3 段" in msgs[0] and "（一）" in msgs[0]     # 一、下面直接用了 1.，只提醒一次
+    assert "第 5 段" in msgs[1] and "第 2 个" in msgs[1]    # 一、之后是 三、
+    assert "第 7 段" in msgs[2] and "第 2 个" in msgs[2]    # （一）之后是 （三）
+    ok = classify(["标题", "一、总体", "（一）目标", "（二）任务", "二、保障", "（一）经费"])
+    assert check_numbering(ok) == []

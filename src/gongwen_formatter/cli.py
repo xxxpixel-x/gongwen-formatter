@@ -32,7 +32,9 @@ def main(argv=None) -> int:
     print("格式要求解析结果：")
     for role in DISPLAY_ROLES:
         print(f"  {ROLE_LABELS[role]:<5}", "，".join(v for v in describe(spec.styles[role]).values() if v))
-    print(f"  英文数字 {spec.latin_font}；页边距 上下左右 {spec.margins_mm} 毫米\n")
+    hf = lambda v: "默认" if v is None else f"{v:g}"
+    print(f"  英文数字 {spec.latin_font}；页边距 上下左右 {spec.margins_mm} 毫米；"
+          f"页眉 {hf(spec.header_mm)}、页脚 {hf(spec.footer_mm)} 毫米\n")
 
     print("原稿识别结果：")
     for i, it in enumerate(result.items, 1):
