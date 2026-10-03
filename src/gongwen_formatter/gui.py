@@ -1,7 +1,7 @@
 """图形界面（tkinter，Python 自带，打包后体积小）。
 
 左边：① 格式要求 → 下方表格实时显示“程序理解成了什么”
-右边：② 选择原稿 → 只列出程序不确定的段落（黄色卡片），每张卡片上直接选正确类型
+右边：② 选择原稿 → 排好版的预览；程序不确定的段落标黄，点一下就能改类型
 底部：③ 生成排版文件
 
 布局全部用 grid + 权重，窗口缩放、高分屏下都不会遮挡文字。
@@ -17,9 +17,10 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import __version__
-from .classify import ROLE_LABELS, lead_len
+from .classify import ROLE_LABELS, Role, lead_len
 from .extract import extract
 from .fonts import installed_fonts, missing_fonts
+from .preview import Preview
 from .render import read_document, render
 from .spec import DEFAULT_TEXT, DISPLAY_ROLES, describe, fonts_used, parse
 
@@ -30,7 +31,7 @@ REQ_FILE = CONFIG_DIR / "requirements.txt"
 SPEC_COLUMNS = ["字体", "字号", "加粗", "对齐", "缩进", "行距"]
 LABEL_TO_ROLE = {ROLE_LABELS[r]: r for r in DISPLAY_ROLES}
 
-YELLOW, GREEN, WHITE, GREY = "#fff4c2", "#e3f4e1", "#ffffff", "#6b6b6b"
+GREY = "#6b6b6b"
 
 HINT_SHORT = "每行写一类段落：先写类型，再写格式。例：一级标题（黑体，三号，顶格）"
 HINT_FULL = (
@@ -52,41 +53,6 @@ def auto_wrap(label: tk.Widget, padding: int = 8):
     label.bind("<Configure>", lambda e: label.configure(wraplength=max(e.width - padding, 50)))
 
 
-class ScrollFrame(ttk.Frame):
-    """可以上下滚动的容器：内容放在 self.inner 里。"""
-
-    def __init__(self, master, bg=WHITE):
-        super().__init__(master)
-        self.canvas = tk.Canvas(self, highlightthickness=0, background=bg, borderwidth=0)
-        self.vsb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
-        self.inner = tk.Frame(self.canvas, background=bg)
-        self._win = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
-        self.canvas.configure(yscrollcommand=self.vsb.set)
-        self.canvas.grid(row=0, column=0, sticky="nsew")
-        self.vsb.grid(row=0, column=1, sticky="ns")
-        self.rowconfigure(0, weight=1)
-        self.columnconfigure(0, weight=1)
-        self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._win, width=e.width))
-        # 鼠标停在区域上时滚轮才生效，不影响别处
-        self.canvas.bind("<Enter>", lambda e: self._wheel(True))
-        self.canvas.bind("<Leave>", lambda e: self._wheel(False))
-
-    def _wheel(self, on: bool):
-        if on:
-            self.canvas.bind_all("<MouseWheel>", lambda e: self.canvas.yview_scroll(int(-e.delta / 120), "units"))
-            self.canvas.bind_all("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
-            self.canvas.bind_all("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
-        else:
-            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-                self.canvas.unbind_all(seq)
-
-    def clear(self):
-        for w in self.inner.winfo_children():
-            w.destroy()
-        self.canvas.yview_moveto(0)
-
-
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -98,7 +64,7 @@ class App(tk.Tk):
         self.fonts: set[str] | None = None
         self._fonts_ready = False
         self._parse_job = None
-        self.show_all = tk.BooleanVar(value=False)
+        self.sel: int | None = None   # 预览里当前选中的段落
 
         self._init_style()
         self._build()
@@ -207,7 +173,8 @@ class App(tk.Tk):
         btns = ttk.Frame(left)
         btns.grid(row=3, column=0, sticky="w", pady=6)
         ttk.Button(btns, text="恢复默认要求", command=self._reset_requirements).pack(side="left")
-        ttk.Button(btns, text="另存txt…", command=self._export_requirements).pack(side="left", padx=6)
+        ttk.Button(btns, text="导入txt…", command=self._import_requirements).pack(side="left", padx=6)
+        ttk.Button(btns, text="另存txt…", command=self._export_requirements).pack(side="left")
 
         self.spec_msg = ttk.Label(left, style="Warn.TLabel")
         self.spec_msg.grid(row=4, column=0, sticky="ew")
@@ -246,16 +213,33 @@ class App(tk.Tk):
         self.file_label = ttk.Label(head, text="尚未选择（支持 .docx）", style="Hint.TLabel")
         self.file_label.grid(row=0, column=2, sticky="ew")
 
-        self.doc_msg = ttk.Label(right, text="选择文件后，这里会列出程序拿不准的段落，请逐个确认。",
+        self.doc_msg = ttk.Label(right, text="选择文件后，这里显示排好版的预览。黄色是程序拿不准的段落，点一下就能改类型。",
                                  style="Hint.TLabel")
         self.doc_msg.grid(row=1, column=0, sticky="ew", pady=(8, 4))
         auto_wrap(self.doc_msg)
 
-        ttk.Checkbutton(right, text="显示全部段落（发现其他段落排错时再用）",
-                        variable=self.show_all, command=self._fill_cards).grid(row=2, column=0, sticky="w")
+        # 当前选中的段落：改类型、确认、跳到下一处
+        bar = ttk.Frame(right)
+        bar.grid(row=2, column=0, sticky="ew", pady=(2, 6))
+        bar.columnconfigure(0, weight=1)
+        self.sel_label = ttk.Label(bar, font=self.f_bold)
+        self.sel_label.grid(row=0, column=0, sticky="ew")
+        auto_wrap(self.sel_label)
+        ttk.Label(bar, text="这一段是：").grid(row=0, column=1, padx=(8, 2))
+        self.role_box = ttk.Combobox(bar, values=list(LABEL_TO_ROLE), state="disabled", width=8, font=self.f_base)
+        self.role_box.grid(row=0, column=2)
+        self.role_box.bind("<<ComboboxSelected>>", lambda e: self._set_role(LABEL_TO_ROLE[self.role_box.get()]))
+        self.ok_btn = ttk.Button(bar, text="✓ 对的", command=self._confirm, state="disabled")
+        self.ok_btn.grid(row=0, column=3, padx=6)
+        self.next_btn = ttk.Button(bar, text="下一处待确认 ▸", command=self._next_pending, state="disabled")
+        self.next_btn.grid(row=0, column=4)
 
-        self.cards = ScrollFrame(right)
-        self.cards.grid(row=3, column=0, sticky="nsew", pady=(6, 0))
+        self.preview = Preview(right, on_click=self._select)
+        self.preview.grid(row=3, column=0, sticky="nsew")
+        note = ttk.Label(right, style="Hint.TLabel",
+                         text="预览仅供核对：不分页，两端对齐显示为左对齐，没装的字体用相近字体代替，以生成的 Word 文件为准。")
+        note.grid(row=4, column=0, sticky="ew", pady=(4, 0))
+        auto_wrap(note)
 
     # ---------- 格式要求 ----------
 
@@ -300,6 +284,7 @@ class App(tk.Tk):
             f"页脚{f:g}（毫米）" if f is not None else "页脚默认", ""])
         self._update_spec_msg()
         self._save_requirements()
+        self._refresh_preview()
 
     def _update_spec_msg(self):
         msgs = list(self.spec.problems)
@@ -345,15 +330,37 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror(APP_NAME, f"读取模板失败：{e}")
             return
-        current = self._req().strip()
-        if current and current != DEFAULT_TEXT.strip() and not messagebox.askyesno(
-                APP_NAME, "用模板的格式替换输入框里现在的要求吗？\n（想保留现在的要求，可以先点“另存txt…”）"):
+        if not self._replace_requirements(result.text, "模板的格式"):
             return
-        self.req_text.delete("1.0", "end")
-        self.req_text.insert("1.0", result.text)
         messagebox.showinfo(APP_NAME, f"已从模板读取 {len(result.found)} 类段落的格式，填进了“格式要求”。\n\n"
                             "以 # 开头的行是说明，不影响排版。请对照下方“程序理解的格式”核对一遍，"
                             "需要的话直接在输入框里改。")
+
+    def _replace_requirements(self, text: str, what: str) -> bool:
+        """用 text 替换输入框；输入框里有自己改过的内容时先问一下。"""
+        current = self._req().strip()
+        if current and current not in (DEFAULT_TEXT.strip(), text.strip()) and not messagebox.askyesno(
+                APP_NAME, f"用{what}替换输入框里现在的要求吗？\n（想保留现在的要求，可以先点“另存txt…”）"):
+            return False
+        self.req_text.delete("1.0", "end")
+        self.req_text.insert("1.0", text)
+        return True
+
+    def _import_requirements(self):
+        path = filedialog.askopenfilename(title="选择格式要求文本文件", filetypes=[("文本文件", "*.txt")])
+        if not path:
+            return
+        raw = Path(path).read_bytes()
+        for enc in ("utf-8-sig", "gb18030"):   # 记事本存的 UTF-8 或 ANSI（GBK）都能读
+            try:
+                text = raw.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            messagebox.showerror(APP_NAME, "读不出这个文件的文字，请在记事本里另存为 UTF-8 编码后再导入。")
+            return
+        self._replace_requirements(text.replace("\r\n", "\n"), f"《{Path(path).name}》里的要求")
 
     def _reset_requirements(self):
         if messagebox.askyesno(APP_NAME, "恢复成默认格式要求（规范图片）？当前内容会被覆盖。"):
@@ -366,7 +373,7 @@ class App(tk.Tk):
         if path:
             Path(path).write_text(self._req(), encoding="utf-8")
 
-    # ---------- 原稿：只列出拿不准的段落 ----------
+    # ---------- 原稿：排版预览，拿不准的段落标黄 ----------
 
     def _choose_file(self):
         path = filedialog.askopenfilename(filetypes=[("Word 文档", "*.docx")])
@@ -382,86 +389,82 @@ class App(tk.Tk):
             it.confirmed = it.confidence != "low"
         self.file_label.configure(text=Path(path).name)
         self.go_btn.configure(state="normal" if self.items else "disabled")
-        self._fill_cards()
+        self.sel = None
+        self.preview.show(self.items, self.spec, None, keep_scroll=False)
+        pending = self._pending_idxs()
+        if pending:
+            self._select(pending[0], scroll=True)
+        else:
+            self._update_bar()
+        self._refresh_summary()
+
+    def _pending_idxs(self) -> list[int]:
+        return [i for i, it in enumerate(self.items) if not getattr(it, "confirmed", True)]
 
     def _pending(self) -> int:
-        return sum(not getattr(it, "confirmed", True) for it in self.items)
+        return len(self._pending_idxs())
 
     def _refresh_summary(self):
         total, pending = len(self.items), self._pending()
         if not self.items:
             return
         if pending:
-            text = (f"共 {total} 段，有 {pending} 段程序拿不准（黄色卡片）。"
-                    "看一下每张卡片：识别对了就点“✓ 对的”，不对就在下拉框里选正确的类型。")
+            text = (f"共 {total} 段，有 {pending} 段程序拿不准（预览中的黄色段落）。"
+                    "识别对了就点“✓ 对的”，不对就在“这一段是”里选正确的类型。")
         else:
-            text = f"共 {total} 段，全部识别完成，可以直接生成。"
+            text = f"共 {total} 段，全部识别完成，可以直接生成。发现排错的段落，点它就能改类型。"
         self.doc_msg.configure(text="\n".join([text] + self.read_warnings))
         self.status.configure(text="")
 
-    def _fill_cards(self):
-        self.cards.clear()
-        if not self.items:
+    def _refresh_preview(self):
+        if self.items:
+            self.preview.show(self.items, self.spec, self.sel)
+
+    def _select(self, i: int, scroll: bool = False):
+        self.sel = i
+        self._update_bar()
+        self._refresh_preview()
+        if scroll:
+            self.preview.see(i)
+
+    def _update_bar(self):
+        self.next_btn.configure(state="normal" if self._pending() else "disabled")
+        if self.sel is None:
+            self.sel_label.configure(text="点预览里的任意一段，可以查看和修改它的类型。" if self.items else "")
+            self.role_box.set("")
+            self.role_box.configure(state="disabled")
+            self.ok_btn.configure(state="disabled")
             return
-        idxs = [i for i, it in enumerate(self.items)
-                if it.raw is None and (self.show_all.get() or it.confidence == "low")]
-        if not idxs:
-            tk.Label(self.cards.inner, text="✓ 所有段落都识别好了，不需要确认。", bg=WHITE,
-                     fg="#2e7d32", font=self.f_bold, pady=20).pack(fill="x")
-        for i in idxs:
-            self._make_card(i)
+        it = self.items[self.sel]
+        status = "待确认" if not it.confirmed else ("已确认" if it.confidence == "low" else "")
+        self.sel_label.configure(text=f"第 {self.sel + 1} 段" + (f"（{status}）" if status else "")
+                                 + (f"　·　{it.note}" if it.note else ""))
+        self.role_box.configure(state="readonly")
+        self.role_box.set(it.label)
+        self.ok_btn.configure(state="disabled" if it.confirmed else "normal")
+
+    def _set_role(self, role: Role):
+        it = self.items[self.sel]
+        it.role, it.lead_len, it.confirmed = role, lead_len(role, it.text), True
+        self._after_change()
+
+    def _confirm(self):
+        self.items[self.sel].confirmed = True
+        self._after_change(advance=True)
+
+    def _after_change(self, advance: bool = False):
         self._refresh_summary()
+        if advance and self._pending():
+            self._next_pending()   # 确认后自动跳到下一处
+        else:
+            self._update_bar()
+            self._refresh_preview()
 
-    def _make_card(self, i: int):
-        item = self.items[i]
-        bg = WHITE if item.confidence != "low" else (GREEN if item.confirmed else YELLOW)
-        card = tk.Frame(self.cards.inner, bg=bg, highlightbackground="#d0d0d0", highlightthickness=1,
-                        padx=10, pady=8)
-        card.pack(fill="x", padx=4, pady=4)
-        card.columnconfigure(0, weight=1)
-
-        meta = f"第 {i + 1} 段" + (f"　·　{item.note}" if item.note else "")
-        meta_lbl = tk.Label(card, text=meta, bg=bg, fg=GREY, font=self.f_small, anchor="w", justify="left")
-        meta_lbl.grid(row=0, column=0, sticky="ew")
-        auto_wrap(meta_lbl, 24)
-        if i > 0 and item.confidence == "low":
-            prev = self.items[i - 1].text
-            ctx = tk.Label(card, text="上一段：" + (prev[:40] + "…" if len(prev) > 40 else prev),
-                           bg=bg, fg=GREY, font=self.f_small, anchor="w", justify="left")
-            ctx.grid(row=1, column=0, sticky="ew")
-            auto_wrap(ctx, 24)
-        text = item.text if len(item.text) <= 120 else item.text[:120] + "…"
-        body = tk.Label(card, text=text, bg=bg, font=self.f_bold, anchor="w", justify="left")
-        body.grid(row=2, column=0, sticky="ew", pady=(4, 6))
-        auto_wrap(body, 24)
-
-        row = tk.Frame(card, bg=bg)
-        row.grid(row=3, column=0, sticky="w")
-        tk.Label(row, text="这一段是：", bg=bg).pack(side="left")
-        box = ttk.Combobox(row, values=list(LABEL_TO_ROLE), state="readonly",
-                           width=8, font=self.f_base)
-        box.set(item.label)
-        box.pack(side="left", padx=(2, 8))
-        ok = ttk.Button(row, text="✓ 对的", command=lambda: confirm(box.get()))
-        if item.confidence == "low":
-            ok.pack(side="left")
-
-        def paint(color):
-            for w in [card, row] + [c for c in card.winfo_children() + row.winfo_children()
-                                    if isinstance(c, tk.Label)]:
-                w.configure(bg=color)
-
-        def confirm(label):
-            role = LABEL_TO_ROLE[label]
-            item.role = role
-            item.lead_len = lead_len(role, item.text)
-            item.confirmed = True
-            if item.confidence == "low":
-                paint(GREEN)
-                ok.configure(text="✓ 已确认")
-            self._refresh_summary()
-
-        box.bind("<<ComboboxSelected>>", lambda e: confirm(box.get()))
+    def _next_pending(self):
+        idxs = self._pending_idxs()
+        if idxs:
+            start = -1 if self.sel is None else self.sel
+            self._select(next((i for i in idxs if i > start), idxs[0]), scroll=True)
 
     # ---------- 生成 ----------
 
@@ -480,9 +483,12 @@ class App(tk.Tk):
             messagebox.showerror(APP_NAME, "不能覆盖原稿，请换一个文件名。")
             return
         try:
-            render(self.items, parse(self._req()), out)
+            render(self.items, parse(self._req()), out, source_path=src)
         except PermissionError:
             messagebox.showerror(APP_NAME, "保存失败：目标文件可能正在 Word 里打开，请先关闭它。")
+            return
+        except (OSError, ValueError) as e:
+            messagebox.showerror(APP_NAME, f"保存失败：{e}")
             return
         self.status.configure(text=f"已生成：{out}")
         if messagebox.askyesno(APP_NAME, "排版完成！现在打开文件看看吗？") and sys.platform == "win32":

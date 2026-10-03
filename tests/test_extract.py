@@ -55,3 +55,13 @@ def test_missing_roles_follow_template_body(tmp_path):
     got = extract(str(tpl))
     assert any("附件" in n and "推算" in n for n in got.notes)
     assert parse(got.text).styles[Role.ATTACH_LABEL].font == "宋体"
+
+
+def test_unbold_h2_survives_template_roundtrip(tmp_path):
+    src, tpl = tmp_path / "src.docx", tmp_path / "tpl.docx"
+    doc = Document()
+    for text in LINES:
+        doc.add_paragraph(text)
+    doc.save(src)
+    format_file(src, tpl, "二级标题（楷体，小四，不加粗）")
+    assert parse(extract(tpl).text).styles[Role.H2].bold is False

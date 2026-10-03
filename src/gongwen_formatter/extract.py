@@ -28,7 +28,6 @@ ROLE_WORDS = {
 ORDER = list(ROLE_WORDS)
 # 模板里没有时不用提醒：没写的四、五级标题本来就和正文一样
 QUIET = {Role.H4, Role.H5}
-NUMBERED = (Role.H3, Role.H4, Role.H5)   # 只加粗编号到冒号的部分
 # 模板里缺少某类段落时，从正文格式推算（与规范图片一致的习惯做法）
 DERIVE = {
     Role.SUBTITLE: dict(align="center", indent=0.0, bold=False),
@@ -191,8 +190,8 @@ def _describe(look: Look, role: Role) -> str:
     if look.font:
         parts.append(look.font)
     parts.append(_size_text(look.size))
-    if role in NUMBERED or look.bold:  # 三~五级标题始终写明是否加粗（只作用于冒号前）
-        parts.append("加粗" if look.bold else "不加粗")
+    # 必须显式写“不加粗”，否则再解析时二级标题会恢复默认的加粗。
+    parts.append("加粗" if look.bold else "不加粗")
     parts.append(ALIGN_LABELS[look.align])
     parts.append(f"首行缩进{look.indent:g}字符" if look.indent else "顶格")
     if look.right_indent:
