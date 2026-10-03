@@ -9,13 +9,17 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from zipfile import BadZipFile
+
+from docx.opc.exceptions import PackageNotFoundError
+from lxml.etree import XMLSyntaxError
 
 from . import ROLE_LABELS, parse, read_document, render
 from .spec import DEFAULT_TEXT, DISPLAY_ROLES, describe
 
 
 def main(argv=None) -> int:
-    if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8" and hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")  # Windows 终端中文
 
     ap = argparse.ArgumentParser(prog="gongwen-fmt", description="按格式要求给 Word 公文自动排版")
@@ -25,9 +29,13 @@ def main(argv=None) -> int:
     ap.add_argument("--check", action="store_true", help="只打印识别结果，不生成文件")
     args = ap.parse_args(argv)
 
-    text = Path(args.requirements).read_text(encoding="utf-8") if args.requirements else DEFAULT_TEXT
-    spec = parse(text)
-    result = read_document(args.src)
+    try:
+        text = Path(args.requirements).read_text(encoding="utf-8-sig") if args.requirements else DEFAULT_TEXT
+        spec = parse(text)
+        result = read_document(args.src)
+    except (OSError, ValueError, KeyError, BadZipFile, PackageNotFoundError, XMLSyntaxError) as exc:
+        print(f"读取失败：{exc}；请确认原稿为有效的 .docx，格式要求为 UTF-8 文本。", file=sys.stderr)
+        return 1
 
     print("格式要求解析结果：")
     for role in DISPLAY_ROLES:
@@ -47,7 +55,11 @@ def main(argv=None) -> int:
         return 0
 
     out = args.out or str(Path(args.src).with_name(Path(args.src).stem + "_已排版.docx"))
-    render(result.items, spec, out)
+    try:
+        render(result.items, spec, out, source_path=args.src)
+    except (OSError, ValueError) as exc:
+        print(f"保存失败：{exc}", file=sys.stderr)
+        return 1
     print("\n已生成：", out)
     return 0
 

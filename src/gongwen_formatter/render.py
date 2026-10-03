@@ -6,12 +6,17 @@
 from __future__ import annotations
 
 import copy
-import re
+import os
+import tempfile
 from dataclasses import dataclass, field
+from io import BytesIO
+from pathlib import Path
 
 from docx import Document
+from docx.image.exceptions import InvalidImageStreamError, UnexpectedEndOfFileError, UnrecognizedImageError
 from docx.shared import Mm
 from docx.oxml.ns import qn
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.text.paragraph import Paragraph
 from lxml import etree
 
@@ -23,6 +28,23 @@ from .spec import Spec, Style
 class ReadResult:
     items: list[Item]
     warnings: list[str] = field(default_factory=list)
+
+
+def _has_auto_numbering(paragraph: Paragraph) -> bool:
+    """编号可来自直接格式或样式继承；显式 numId=0 会关闭继承的编号。"""
+    levels = [paragraph._p.pPr]
+    style, seen = paragraph.style, set()
+    while style is not None and style.style_id not in seen:
+        seen.add(style.style_id)
+        levels.append(style.element.find(qn("w:pPr")))
+        style = style.base_style
+    for ppr in levels:
+        if ppr is None:
+            continue
+        num_id = ppr.find(f"{qn('w:numPr')}/{qn('w:numId')}")
+        if num_id is not None:
+            return num_id.get(qn("w:val")) != "0"
+    return False
 
 
 def read_document(path: str) -> ReadResult:
@@ -38,8 +60,7 @@ def read_document(path: str) -> ReadResult:
             p = Paragraph(child, doc)
             if child.findall(".//" + qn("w:drawing")) or child.findall(".//" + qn("w:pict")):
                 warnings.append(f"“{clean(p.text)[:12] or '（图片段落）'}”附近有图片，当前版本会跳过图片。")
-            num_id = child.find(f"{qn('w:pPr')}/{qn('w:numPr')}/{qn('w:numId')}")
-            if num_id is not None and num_id.get(qn("w:val")) != "0":  # numId=0 表示“已关闭编号”
+            if _has_auto_numbering(p):
                 warnings.append(f"“{clean(p.text)[:12]}”使用了 Word 自动编号，编号本身不会保留，请在原稿中改成手打编号。")
             # 段内软回车（Shift+Enter）拆成独立段落
             for line in p.text.split("\n"):
@@ -56,7 +77,7 @@ def read_document(path: str) -> ReadResult:
         if isinstance(s, str):
             items.append(next(classified))
         else:
-            items.append(Item(Role.BODY, "[表格]", raw=s, note="表格原样保留"))
+            items.append(Item(Role.BODY, "[表格]", raw=s, source_part=doc.part, note="表格原样保留"))
     warnings += check_numbering(items)
     return ReadResult(items, warnings)
 
@@ -174,14 +195,64 @@ def _setup_document(spec: Spec) -> Document:
     return doc
 
 
-def render(items: list[Item], spec: Spec, out_path: str, blanks: bool = True) -> None:
+def ensure_distinct_paths(source: str, target: str) -> None:
+    """GUI、命令行和库调用都不能通过同名、符号链接或硬链接覆盖原稿。"""
+    src, out = Path(source), Path(target)
+    if src.resolve() == out.resolve() or (src.exists() and out.exists() and src.samefile(out)):
+        raise ValueError("不能覆盖原稿，请选择不同的输出文件名。")
+
+
+def _copy_table(item: Item, doc: Document):
+    """复制 XML 时同时迁移图片和外部链接，不能沿用原文档的关系编号。"""
+    element = copy.deepcopy(item.raw)
+    mapped: dict[str, str] = {}
+    for node in element.iter():
+        for attr in (qn("r:id"), qn("r:embed"), qn("r:link")):
+            old_id = node.get(attr)
+            if old_id is None:
+                continue
+            if old_id not in mapped:
+                source = item.source_part
+                if source is None or old_id not in source.rels:
+                    raise ValueError("表格中的图片或链接缺少源关系，无法完整保存。")
+                rel = source.rels[old_id]
+                if rel.is_external:
+                    new_id = doc.part.relate_to(rel.target_ref, rel.reltype, is_external=True)
+                elif rel.reltype == RT.IMAGE:
+                    try:
+                        new_id, _ = doc.part.get_or_add_image(BytesIO(rel.target_part.blob))
+                    except (InvalidImageStreamError, UnexpectedEndOfFileError, UnrecognizedImageError) as exc:
+                        raise ValueError("表格图片已损坏或格式暂不支持，请先转换为 PNG 或 JPEG。") from exc
+                else:
+                    raise ValueError("表格包含暂不支持的嵌入对象，无法完整保存；请先转换为普通文字或图片。")
+                mapped[old_id] = new_id
+            node.set(attr, mapped[old_id])
+    return element
+
+
+def _save_atomic(doc: Document, out_path: str) -> None:
+    """先在目标目录写完临时文件，再替换；失败时已有输出保持不变。"""
+    target = Path(out_path)
+    with tempfile.NamedTemporaryFile(prefix=".gongwen-", suffix=".docx", dir=target.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+    try:
+        doc.save(temporary)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def render(items: list[Item], spec: Spec, out_path: str, blanks: bool = True,
+           *, source_path: str | None = None) -> None:
+    if source_path is not None:
+        ensure_distinct_paths(source_path, out_path)
     doc = _setup_document(spec)
     sect = doc.element.body.find(qn("w:sectPr"))
     for item in insert_blanks(items) if blanks else items:
-        el = copy.deepcopy(item.raw) if item.raw is not None else _paragraph(item, spec)
+        el = _copy_table(item, doc) if item.raw is not None else _paragraph(item, spec)
         sect.addprevious(el)
 
     props = doc.core_properties
     props.author = props.last_modified_by = ""
     props.title = next((i.text for i in items if i.role == Role.TITLE), "")
-    doc.save(out_path)
+    _save_atomic(doc, out_path)

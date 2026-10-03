@@ -480,9 +480,12 @@ class App(tk.Tk):
             messagebox.showerror(APP_NAME, "不能覆盖原稿，请换一个文件名。")
             return
         try:
-            render(self.items, parse(self._req()), out)
+            render(self.items, parse(self._req()), out, source_path=src)
         except PermissionError:
             messagebox.showerror(APP_NAME, "保存失败：目标文件可能正在 Word 里打开，请先关闭它。")
+            return
+        except (OSError, ValueError) as e:
+            messagebox.showerror(APP_NAME, f"保存失败：{e}")
             return
         self.status.configure(text=f"已生成：{out}")
         if messagebox.askyesno(APP_NAME, "排版完成！现在打开文件看看吗？") and sys.platform == "win32":

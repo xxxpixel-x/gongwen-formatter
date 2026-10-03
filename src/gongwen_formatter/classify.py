@@ -46,10 +46,10 @@ ROLE_LABELS = {
 CN_NUM = "一二三四五六七八九十百零〇"
 RE_H1 = re.compile(rf"^[{CN_NUM}]+[、，,.．]")
 RE_H2 = re.compile(rf"^[（(][{CN_NUM}]+[）)]")
-RE_H3 = re.compile(r"^\d{1,2}\s*[.．、](?!\d)\s*")   # (?!\d)：不把“3.5万元”当成编号
+RE_H3 = re.compile(r"^\d{1,2}\s*(?:[.．](?!\d)|、)\s*")  # 小数点后不能紧接数字，顿号不受此限
 RE_H4 = re.compile(r"^[（(]\d{1,2}[）)]")
 RE_H5 = re.compile(r"^\d{1,2}[）)]")
-RE_ATTACH = re.compile(r"^附\s*件\s*\d*\s*[:：]?")
+RE_ATTACH = re.compile(r"^附\s*件\s*\d*\s*(?:[:：]|$)")
 RE_DATE = re.compile(
     rf"^([0-9xX]{{4}}|[{CN_NUM}]{{4}})\s*年\s*[0-9xX{CN_NUM}]{{1,3}}\s*月"
     rf"\s*[0-9xX{CN_NUM}]{{1,3}}\s*日$"
@@ -69,6 +69,8 @@ class Item:
     raw: object = field(default=None, repr=False)  # 表格等无需识别的原始 XML
     confirmed: bool = True       # 界面里：低置信度段落在用户确认前为 False
     fixed: str = ""              # 编号写法被统一过时的说明，如 “1、”→“1.”
+    number_role: Role | None = None  # 编号层级独立于排版角色，正文条目也参与连续性检查
+    source_part: object = field(default=None, repr=False)  # 表格中的图片、超链接关系来自原文档
 
     @property
     def label(self) -> str:
@@ -91,21 +93,53 @@ def _short_heading_like(text: str, limit: int = 15) -> bool:
 
 
 def h3_lead_len(text: str, num_re: re.Pattern = RE_H3) -> int:
-    """“1. 思想政治引领：xxx” → 加粗到冒号；没有冒号就只加粗编号。四、五级标题同样处理。"""
+    """只取首个分句的非数字冒号；没有明确分界就只加粗编号。四、五级标题同样处理。"""
     m = num_re.match(text)
     num_len = m.end() if m else 0
-    colon = text.find("：", 0, 31)
-    if colon == -1:
-        colon = text.find(":", 0, 31)
-    return colon + 1 if colon != -1 else num_len
+    stop = re.search(r"[。！？!?；;，,：:\r\n]", text[num_len:num_len + 31])
+    if stop is not None:
+        pos = num_len + stop.start()
+        if stop.group() in "：:" and pos > num_len and not _numeric_colon(text, pos):
+            return pos + 1
+    return num_len
+
+
+def _numeric_colon(text: str, pos: int) -> bool:
+    """9:30、1：2 等时间或比例里的冒号不能用作标题分界。"""
+    return 0 < pos < len(text) - 1 and text[pos - 1].isdigit() and text[pos + 1].isdigit()
+
+
+# 文字规则只能判断“像不像标题”。30 字是保守上限，不是公文标题的规范限制。
+_H2_TITLE_LIMIT = 30
+_H2_BREAK = re.compile(r"[。！？!?；;：:\r\n]")
+
+
+def _h2_heading_end(text: str) -> int:
+    """返回候选短标题边界；没有明确边界时返回 0，自动识别应回退到正文。"""
+    number = RE_H2.match(text)
+    start = number.end() if number else 0
+    stop = _H2_BREAK.search(text, start)
+    title = text[start:stop.start() if stop else len(text)].strip(SPACES)
+    if not title or len(title) > _H2_TITLE_LIMIT:
+        return 0
+    if stop is None:
+        return len(text) if title[-1] not in END_PUNCT else 0
+
+    # 问号、感叹号、分号等不作为标题/正文的分界；多分句也不宜猜成短标题。
+    if stop.group() not in "。：:" or any(c in title for c in "，,"):
+        return 0
+    if stop.group() in "：:" and _numeric_colon(text, stop.start()):
+        return 0
+    tail = text[stop.end():].strip(SPACES)
+    if stop.group() == "。" and not tail.strip("”’」』）)]\"'"):
+        # 句号在段尾（包括收尾引号、括号）是完整句，不能据此将整段套用标题格式。
+        return 0
+    return stop.end() if tail else len(text)
 
 
 def h2_lead_len(text: str) -> int:
-    """（一）标题。正文…… 同段时只有标题部分用二级标题格式。"""
-    stop = text.find("。")
-    if stop != -1 and stop < len(text) - 1:
-        return stop + 1
-    return len(text)
+    """短标题后接句号/冒号时只格式化标题；人工指定 H2 时允许整段作为标题。"""
+    return _h2_heading_end(text) or len(text)
 
 
 def lead_len(role: Role, text: str) -> int:
@@ -127,7 +161,7 @@ LEVEL_SAMPLE = {1: "一、", 2: "（一）", 3: "1.", 4: "（1）", 5: "1）"}
 _NORMALIZE = {
     Role.H1: (re.compile(rf"^([{CN_NUM}]+)\s*[、，,.．]"), r"\1、"),
     Role.H2: (re.compile(rf"^[（(]([{CN_NUM}]+)[）)][、，,.．]?"), r"（\1）"),
-    Role.H3: (re.compile(r"^(\d{1,2})\s*[.．、](?!\d)"), r"\1."),
+    Role.H3: (re.compile(r"^(\d{1,2})\s*(?:[.．](?!\d)|、)"), r"\1."),
     Role.H4: (re.compile(r"^[（(](\d{1,2})[）)][、，,.．]?"), r"（\1）"),
     Role.H5: (re.compile(r"^(\d{1,2})[）)][、，,.．]?"), r"\1）"),
 }
@@ -140,6 +174,8 @@ def normalize_number(role: Role, text: str) -> tuple[str, str]:
     if not m:
         return text, ""
     new = m.expand(rule[1])
+    if role == Role.H3 and text[m.end():m.end() + 1].isdigit():
+        new += " "  # “1、2026年”→“1. 2026年”，避免再读时与小数混淆
     if new == m.group(0):
         return text, ""
     return new + text[m.end():], f"“{m.group(0)}”→“{new}”"
@@ -175,17 +211,18 @@ def check_numbering(items: list[Item], limit: int = 8) -> list[str]:
     for i, it in enumerate(items):
         if it.fixed and it.fixed not in fixed:
             fixed.append(it.fixed)
-        level = LEVEL.get(it.role)
+        role = it.number_role if it.role == Role.BODY else it.role
+        level = LEVEL.get(role)
         if level is None:
             continue
         for deeper in range(level + 1, 6):
             last.pop(deeper, None)
         where = f"第 {i + 1} 段“{it.text[:12]}”"
-        if level > 1 and (level - 1) not in last:
+        if it.role != Role.BODY and level > 1 and (level - 1) not in last:
             problems.append(f"{where}：属于“{LEVEL_SAMPLE[level]}”这一级，但前面没有上一级“{LEVEL_SAMPLE[level - 1]}”，"
                             f"层级序号应依次为 一、→（一）→1.→（1）→1），请确认是否混用")
             last[level - 1] = -1   # 同一处缺上一级只提醒一次
-        num = _number_of(it.role, it.text)
+        num = _number_of(role, it.text)
         prev = last.get(level)
         if num is not None and prev != -1:
             want = (prev or 0) + 1
@@ -210,21 +247,36 @@ def classify(texts: list[str]) -> list[Item]:
     if n == 0:
         return items
 
-    # 1) 编号明确的标题；编号写法顺手统一（如“1、”→“1.”、“(1)”→“（1）”）
-    for it in items:
+    # 1) 编号只是结构线索；二级编号后也可能直接是正文。
+    numbered: set[int] = set()
+    for i, it in enumerate(items):
         role = next((r for r, rx in NUM_RE.items() if rx.match(it.text)), None)
         if role is not None:
+            numbered.add(i)
+            it.number_role = role
             it.text, it.fixed = normalize_number(role, it.text)
-            it.role, it.lead_len = role, lead_len(role, it.text)
+            if role == Role.H2:
+                end = _h2_heading_end(it.text)
+                if not end:
+                    it.confidence = "low"
+                    it.note = "带二级编号，但未找到明确的短标题，先按正文处理，请确认"
+                    continue
+                it.role, it.lead_len = role, end
+                if end < len(it.text):
+                    it.confidence = "low"
+                    it.note = "按句号或冒号前的短句识别标题，其余按正文处理，请确认分界"
+            else:
+                it.role, it.lead_len = role, lead_len(role, it.text)
         elif RE_DATE.match(it.text):
             it.role = Role.DATE
 
     # 2) 大标题、副标题：第一段是标题；第二段很短、不以标点结尾、不是编号标题 → 副标题
-    if items[0].role == Role.BODY:
+    if items[0].role == Role.BODY and 0 not in numbered:
         items[0].role = Role.TITLE
     else:
-        items[0].confidence, items[0].note = "low", "第一段带编号，可能缺少大标题"
-    if n > 1 and items[1].role == Role.BODY and _short_heading_like(items[1].text, 30):
+        items[0].confidence = "low"
+        items[0].note += ("；" if items[0].note else "") + "第一段带编号，可能缺少大标题"
+    if n > 1 and 1 not in numbered and items[1].role == Role.BODY and _short_heading_like(items[1].text, 30):
         items[1].role, items[1].confidence = Role.SUBTITLE, "low"
         items[1].note = "根据“短、无标点结尾”判断为副标题"
 
@@ -243,20 +295,22 @@ def classify(texts: list[str]) -> list[Item]:
         if it.role != Role.DATE:
             continue
         j = i - 1
-        while j >= 0 and i - j <= 2 and items[j].role == Role.BODY \
+        while j >= 0 and j not in numbered and i - j <= 2 and items[j].role == Role.BODY \
                 and _short_heading_like(items[j].text, 25):
             items[j].role = Role.SIGNATURE
             j -= 1
 
     # 5) 没有编号、但像小标题的短行（如图片里的“相关说明”）
     for i, it in enumerate(items):
-        if i < 2 or it.role != Role.BODY or not _short_heading_like(it.text, 12):
+        if i < 2 or i in numbered or it.role != Role.BODY or not _short_heading_like(it.text, 12):
             continue
         nxt = items[i + 1] if i + 1 < n else None
         if nxt is not None and nxt.role in (Role.BODY, Role.H2, Role.H3, Role.H4, Role.H5):
             it.role, it.confidence = Role.H1, "low"
             it.note = "没有编号，根据“短行 + 后面接正文”猜测为一级标题"
 
+    for it in items:
+        it.confirmed = it.confidence != "low"
     return items
 
 

@@ -13,7 +13,7 @@ if not exist packaging\ChineseSimplified.isl (
 )
 set ISCC="%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
 if exist %ISCC% (
-  %ISCC% /DAppVersion=0.5.0 packaging\installer.iss || goto :error
+  %ISCC% /DAppVersion=0.5.1 packaging\installer.iss || goto :error
 ) else (
   echo 未找到 Inno Setup 6，只生成了免安装版：dist\GongwenFormatter\
 )
