@@ -18,7 +18,9 @@ from .spec import Spec, Style
 PT_PER_MM = 72 / 25.4
 PAGE_W_MM = 210
 
-PAGE_BG, DESK_BG = "#ffffff", "#e6e6e6"
+PAGE_BG, DESK_BG, PAGE_EDGE = "#ffffff", "#e9ecef", "#cfd4da"
+MAX_PAGE_PX = 820   # 页面最宽多少像素（按 96 DPI，高分屏自动放大）
+GAP = 16
 YELLOW, GREEN = "#fff1a8", "#dff3dc"
 SELECT_BG = "#eef4ff"
 JUSTIFY = {"both": "left", "left": "left", "center": "center", "right": "right"}
@@ -42,14 +44,23 @@ class Preview(tk.Frame):
     def __init__(self, master, on_click: Callable[[int], None]):
         super().__init__(master, background=DESK_BG)
         self.on_click = on_click
-        self.text = tk.Text(self, wrap="char", relief="flat", borderwidth=0, highlightthickness=0,
+        # 页面居中放在灰色“桌面”上，宽度有上限：窗口很宽时字也不会被放得过大
+        self.text = tk.Text(self, wrap="char", relief="flat", borderwidth=0, highlightthickness=1,
+                            highlightbackground=PAGE_EDGE, highlightcolor=PAGE_EDGE,
                             background=PAGE_BG, cursor="arrow", padx=0, pady=0)
-        sb = tk.Scrollbar(self, orient="vertical", command=self.text.yview)
+        self._sb = sb = tk.Scrollbar(self, orient="vertical", command=self.text.yview)
         self.text.configure(yscrollcommand=sb.set, state="disabled")
-        self.text.grid(row=0, column=0, sticky="nsew")
+        self.text.grid(row=0, column=0, sticky="nsew", pady=GAP)
         sb.grid(row=0, column=1, sticky="ns")
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
+        self._max_page = round(MAX_PAGE_PX * self.winfo_fpixels("1i") / 96)
+        self._page_pad = -1
+        self.bind("<Configure>", self._fit_page)
+
+        # 还没有原稿时盖在预览上的提示区，内容由界面填
+        self.placeholder = tk.Frame(self, background=PAGE_BG)
+        self.placeholder.place(relx=0.5, rely=0.42, anchor="center")
 
         self._fonts: dict[tuple, tkfont.Font] = {}
         self._families: set[str] | None = None
@@ -62,8 +73,16 @@ class Preview(tk.Frame):
     # ---------- 对外 ----------
 
     def show(self, items: list[Item], spec: Spec, selected: int | None = None, keep_scroll: bool = True):
+        self.placeholder.place_forget()
         self._args = (items, spec, selected)
         self._draw(keep_scroll)
+
+    def _fit_page(self, event):
+        avail = event.width - self._sb.winfo_reqwidth()
+        pad = max(GAP, (avail - self._max_page) // 2)
+        if pad != self._page_pad:
+            self._page_pad = pad
+            self.text.grid_configure(padx=pad)
 
     def clear(self):
         self._args = None
