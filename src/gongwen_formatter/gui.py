@@ -25,7 +25,7 @@ from .extract import extract
 from .fonts import installed_fonts, missing_fonts
 from .preview import Preview
 from .render import read_document, render
-from .spec import DEFAULT_TEXT, DISPLAY_ROLES, describe, fonts_used, parse
+from .spec import DEFAULT_TEXT, DISPLAY_ROLES, PARAGRAPH_ROLES, describe_role, fonts_used, parse
 
 APP_NAME = "公文格式整理器"
 CONFIG_DIR = Path(os.environ.get("APPDATA", Path.home() / ".config")) / "gongwen-formatter"
@@ -33,7 +33,7 @@ REQ_FILE = CONFIG_DIR / "requirements.txt"
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
 
 SPEC_COLUMNS = ["字体", "字号", "加粗", "对齐", "缩进", "行距"]
-LABEL_TO_ROLE = {ROLE_LABELS[r]: r for r in DISPLAY_ROLES}
+LABEL_TO_ROLE = {ROLE_LABELS[r]: r for r in PARAGRAPH_ROLES}
 
 # 配色：浅灰底 + 白色卡片，蓝色只用在主要操作上
 BG, CARD, BORDER = "#f3f4f6", "#ffffff", "#dfe3e8"
@@ -49,8 +49,9 @@ HINT_FULL = (
     "也可以点“从模板读取…”，选一份已经排好版的公文，程序会自动写出它的格式要求；"
     "或者点“导入txt…”读入以前保存的要求。\n\n"
     "每行写一类段落，先写类型，再写格式。\n\n"
-    "类型：标题、副标题、一级标题、二级标题、三级标题、四级标题、五级标题、正文、附件、附件名称、落款、日期\n"
-    "（编号依次为 一、→（一）→1.→（1）→1）；四、五级标题没写时与正文相同）\n\n"
+    "类型：标题、副标题、一级标题、二级标题、三级标题、四级标题、五级标题、正文、附件、附件名称、落款、日期、表格标题、表头、表格\n"
+    "（编号依次为 一、→（一）→1.→（1）→1）；四、五级标题没写时与正文相同；"
+    "表格默认保持原样，写了表头（表格第一行）、表格（其余单元格）时只改写到的项）\n\n"
     "格式：字体（仿宋_GB2312、黑体……）、字号（三号、小四、16磅）、加粗、"
     "对齐（居中、两端对齐、右对齐）、缩进（首行缩进2字符、顶格、右缩进1字符）、"
     "行距（行距固定值28磅、1.5倍行距）、段前段后（段前0.5行）\n\n"
@@ -417,7 +418,7 @@ class App(tk.Tk):
         self.spec_tree.delete(*self.spec_tree.get_children())
         rows = []
         for role in DISPLAY_ROLES:
-            d = describe(self.spec.styles[role])
+            d = describe_role(self.spec, role)
             rows.append((ROLE_LABELS[role], [d[c] for c in SPEC_COLUMNS], ()))
         rows.append(("英文数字", [self.spec.latin_font, "", "", "", "", ""], ("page",)))
         t, b, l, r = self.spec.margins_mm

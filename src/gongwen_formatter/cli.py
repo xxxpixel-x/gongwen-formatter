@@ -15,7 +15,7 @@ from docx.opc.exceptions import PackageNotFoundError
 from lxml.etree import XMLSyntaxError
 
 from . import ROLE_LABELS, parse, read_document, render
-from .spec import DEFAULT_TEXT, DISPLAY_ROLES, describe
+from .spec import DEFAULT_TEXT, DISPLAY_ROLES, KEEP, TABLE_ROLES, describe_role
 
 
 def main(argv=None) -> int:
@@ -39,7 +39,10 @@ def main(argv=None) -> int:
 
     print("格式要求解析结果：")
     for role in DISPLAY_ROLES:
-        print(f"  {ROLE_LABELS[role]:<5}", "，".join(v for v in describe(spec.styles[role]).values() if v))
+        values = [v for v in describe_role(spec, role).values() if v and v != KEEP]
+        if role in TABLE_ROLES:
+            values = values + ["其余保持原稿"] if values else ["保持原稿"]
+        print(f"  {ROLE_LABELS[role]:<5}", "，".join(values))
     hf = lambda v: "默认" if v is None else f"{v:g}"
     print(f"  英文数字 {spec.latin_font}；页边距 上下左右 {spec.margins_mm} 毫米；"
           f"页眉 {hf(spec.header_mm)}、页脚 {hf(spec.footer_mm)} 毫米\n")

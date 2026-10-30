@@ -24,6 +24,9 @@ class Role(str, Enum):
     ATTACH_ITEM = "attach_item"    # 附件下的 1. xxx
     SIGNATURE = "signature"      # 落款单位
     DATE = "date"                # 成文日期
+    TABLE_CAPTION = "table_caption"  # 表格标题：表1 ××
+    TABLE_HEAD = "table_head"    # 表格的表头行
+    TABLE = "table"              # 表格的其他单元格
     BLANK = "blank"              # 程序插入的空行
 
 
@@ -40,6 +43,9 @@ ROLE_LABELS = {
     Role.ATTACH_ITEM: "附件名称",
     Role.SIGNATURE: "落款",
     Role.DATE: "日期",
+    Role.TABLE_CAPTION: "表格标题",
+    Role.TABLE_HEAD: "表头",
+    Role.TABLE: "表格",
     Role.BLANK: "空行",
 }
 

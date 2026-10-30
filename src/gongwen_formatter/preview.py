@@ -4,6 +4,7 @@
 - 不分页，整篇连续显示；页宽按 A4 缩放到窗口宽度，页边距、字号、行距、缩进按同一比例
 - tk 不支持两端对齐，按左对齐显示
 - 字体用本机已安装的；没装的（如方正小标宋、仿宋_GB2312）用相近的字体代替
+- 表格按原稿的列宽、合并单元格、字体、底纹画出，单元格里的数字英文也用中文字体显示
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from typing import Callable
 
 from .classify import Item, Role, insert_blanks
 from .spec import Spec, Style
+from .table import alignment, border_color, cells, column_widths, has_borders
 
 PT_PER_MM = 72 / 25.4
 PAGE_W_MM = 210
@@ -23,6 +25,7 @@ MAX_PAGE_PX = 820   # 页面最宽多少像素（按 96 DPI，高分屏自动放
 GAP = 16
 YELLOW, GREEN = "#fff1a8", "#dff3dc"
 SELECT_BG = "#eef4ff"
+TABLE_LINE, TABLE_NO_LINE = "#000000", "#d5d9de"   # 原稿表格没有边框时用浅灰线示意
 JUSTIFY = {"both": "left", "left": "left", "center": "center", "right": "right"}
 
 # 数字、英文、半角符号用西文字体显示（与 render 里 ascii/hAnsi 字体一致）
@@ -68,6 +71,7 @@ class Preview(tk.Frame):
         self._args: tuple | None = None
         self._width = 0
         self._resize_job = None
+        self._windows: list[tk.Widget] = []   # 嵌在页面里的表格，重画前要销毁
         self.text.bind("<Configure>", self._on_resize)
 
     # ---------- 对外 ----------
@@ -86,6 +90,7 @@ class Preview(tk.Frame):
 
     def clear(self):
         self._args = None
+        self._destroy_windows()
         self.text.configure(state="normal")
         self.text.delete("1.0", "end")
         self.text.configure(state="disabled")
@@ -153,6 +158,7 @@ class Preview(tk.Frame):
         top, _, left, right = (m * PT_PER_MM * k for m in spec.margins_mm)
 
         y = t.yview()[0]
+        self._destroy_windows()
         t.configure(state="normal")
         t.delete("1.0", "end")
         for tag in t.tag_names():
@@ -168,25 +174,83 @@ class Preview(tk.Frame):
             i = index.get(id(it))
             st = spec.styles[it.role]
             ptag = f"p{i}" if i is not None else f"b{t.index('end')}"
+            if it.raw is not None:
+                self._table(it.raw, spec, k, left, right, ptag)
+                t.insert("end", "\n", (ptag,))
+                continue
             self._para_tag(ptag, it, st, k, left, right, selected == i)
 
-            if it.raw is not None:   # 表格：原样保留，预览里只占个位置
-                t.insert("end", "［表格：原样保留，预览中不显示］", (ptag, self._font_tag("宋体", round(10.5 * k), False)))
-            else:
-                body = spec.styles[Role.BODY]
-                lead = it.lead_len if it.role in (Role.H2, Role.H3, Role.H4, Role.H5) else 0
-                parts = [(it.text[:lead], st), (it.text[lead:], body)] if 0 < lead < len(it.text) \
-                    else [(it.text, st)]
-                for chunk, cst in parts:
-                    self._insert_runs(chunk, cst, latin, k, ptag)
+            body = spec.styles[Role.BODY]
+            lead = it.lead_len if it.role in (Role.H2, Role.H3, Role.H4, Role.H5) else 0
+            parts = [(it.text[:lead], st), (it.text[lead:], body)] if 0 < lead < len(it.text) \
+                else [(it.text, st)]
+            for chunk, cst in parts:
+                self._insert_runs(chunk, cst, latin, k, ptag)
             t.insert("end", "\n", (ptag,))
-            if i is not None and it.raw is None:
+            if i is not None:
                 t.tag_bind(ptag, "<Button-1>", lambda e, i=i: self.on_click(i))
 
         t.insert("end", "\n", ("top",))   # 下方留白
         t.configure(state="disabled")
         if keep_scroll:
             t.yview_moveto(y)
+
+    def _destroy_windows(self):
+        for w in self._windows:
+            w.destroy()
+        self._windows = []
+
+    def _table(self, tbl, spec: Spec, k: float, left: float, right: float, ptag: str):
+        """用一格一个 Label 画出表格：列宽按原稿比例，放不下时缩到版心宽度（与生成的文件一致）。"""
+        t = self.text
+        widths = column_widths(tbl) or [1]
+        page_px = t.winfo_width() - left - right
+        px_per_twip = k / 20
+        total = sum(widths) * px_per_twip
+        scale = min(1.0, page_px / total) if total else 1.0
+        col_px = [max(8, round(w * px_per_twip * scale)) for w in widths]
+
+        color = border_color(tbl)
+        line = (f"#{color}" if color else TABLE_LINE) if has_borders(tbl) else TABLE_NO_LINE
+        frame = tk.Frame(t, background=line, cursor="arrow")
+        pad = max(2, round(4 * k))
+        grid_cells = cells(tbl)
+        n_rows = max((c.row + c.rowspan for c in grid_cells), default=0)
+        for c in grid_cells:
+            # 表格保持原稿的格式；格式要求里写到的项才用要求里的
+            role = Role.TABLE_HEAD if c.head else Role.TABLE
+            st, fields = spec.styles[role], spec.table_fields.get(role, set())
+            font = st.font if "font" in fields else (c.font or "宋体")
+            size = st.size if "size" in fields else (c.size or 10.5)
+            bold = st.bold if "bold" in fields else c.bold
+            align = st.align if "align" in fields else c.align
+            span_px = sum(col_px[c.col:c.col + c.colspan]) or col_px[-1]
+            anchor, justify = {"center": ("center", "center"), "right": ("e", "right")}.get(align, ("w", "left"))
+            label = tk.Label(frame, text=c.text, background=f"#{c.fill}" if c.fill else PAGE_BG,
+                             foreground=f"#{c.color}" if c.color else "#000000",
+                             font=self._font(font, round(size * k), bold),
+                             anchor=anchor, justify=justify, padx=pad, pady=pad,
+                             wraplength=max(10, span_px - 2 * pad - 1))
+            label.grid(row=c.row, column=c.col, rowspan=c.rowspan, columnspan=c.colspan,
+                       sticky="nsew", padx=(1, 0), pady=(1, 0))
+        for col, w in enumerate(col_px):
+            frame.grid_columnconfigure(col, minsize=w)
+        frame.grid_columnconfigure(len(col_px), minsize=1)   # 最右、最下的边线
+        frame.grid_rowconfigure(n_rows, minsize=1)
+
+        # 滚轮在表格上也能滚动页面
+        def wheel(e):
+            t.yview_scroll(int(-e.delta / 120) or (-1 if e.delta > 0 else 1), "units")
+            return "break"
+        for w in (frame, *frame.winfo_children()):
+            w.bind("<MouseWheel>", wheel)
+
+        t.tag_configure(ptag, lmargin1=round(left), lmargin2=round(left), rmargin=round(right),
+                        justify=alignment(tbl), spacing1=pad, spacing3=pad)
+        start = t.index("end-1c")
+        t.window_create("end", window=frame)
+        t.tag_add(ptag, start, "end-1c")
+        self._windows.append(frame)
 
     def _insert_runs(self, text: str, st: Style, latin: str, k: float, ptag: str):
         px = round(st.size * k)

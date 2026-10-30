@@ -14,20 +14,23 @@ from pathlib import Path
 
 from docx import Document
 from docx.oxml.ns import qn
+from docx.text.paragraph import Paragraph
 from lxml import etree
 
 from .classify import Role, classify, clean
-from .spec import ALIGN_LABELS, PT_TO_NAME
+from .spec import ALIGN_LABELS, PT_TO_NAME, TABLE_ROLES
+from .table import header_rows, mark_captions, rows
 
 # 输出时每类段落用的名字（必须是 spec.ROLE_NAMES 认识的写法）
 ROLE_WORDS = {
     Role.TITLE: "标题", Role.SUBTITLE: "副标题", Role.H1: "一级标题", Role.H2: "二级标题",
     Role.H3: "三级标题", Role.H4: "四级标题", Role.H5: "五级标题", Role.BODY: "正文", Role.ATTACH_LABEL: "附件",
     Role.ATTACH_ITEM: "附件名称", Role.SIGNATURE: "落款", Role.DATE: "日期",
+    Role.TABLE_CAPTION: "表格标题", Role.TABLE_HEAD: "表头", Role.TABLE: "表格",
 }
 ORDER = list(ROLE_WORDS)
-# 模板里没有时不用提醒：没写的四、五级标题本来就和正文一样
-QUIET = {Role.H4, Role.H5}
+# 模板里没有时不用提醒：没写的四、五级标题本来就和正文一样；没有表格的模板很常见
+QUIET = {Role.H4, Role.H5, Role.TABLE_CAPTION, Role.TABLE_HEAD, Role.TABLE}
 # 模板里缺少某类段落时，从正文格式推算（与规范图片一致的习惯做法）
 DERIVE = {
     Role.SUBTITLE: dict(align="center", indent=0.0, bold=False),
@@ -221,16 +224,27 @@ def extract(path: str) -> Extracted:
     res = _Resolver(doc)
     paras = [p for p in doc.paragraphs if clean(p.text)]
     items = classify([clean(p.text) for p in paras])
+    mark_captions(items, [p._p for p in paras])
+
+    # 表格单元格：表头行和其余行分开统计（嵌套表格不算）
+    cell_paras: list[tuple[Role, Paragraph]] = []
+    for tbl in doc.element.body.iterchildren(qn("w:tbl")):
+        heads = header_rows(tbl)
+        for i, tr in enumerate(rows(tbl)):
+            role = Role.TABLE_HEAD if i in heads else Role.TABLE
+            for tc in tr.iterchildren(qn("w:tc")):
+                cell_paras += [(role, Paragraph(p, doc)) for p in tc.iterchildren(qn("w:p"))]
+    cell_paras = [(role, p) for role, p in cell_paras if clean(p.text)]
 
     looks: dict[Role, Counter] = {}
     latin = Counter()
-    for item, p in zip(items, paras):
+    for role, p in [(item.role, p) for item, p in zip(items, paras)] + cell_paras:
         runs = [r for r in p.runs if r.text.strip()]
         if not runs:
             continue
         run = runs[0]  # 三级标题看冒号前（加粗部分），其他看第一段文字
         lk = res.look(p, run)
-        looks.setdefault(item.role, Counter())[lk] += 1
+        looks.setdefault(role, Counter())[lk] += 1
         for r in runs:
             if any(ch.isascii() and ch.isalnum() for ch in r.text):
                 latin[res.look(p, r).latin] += 1
@@ -267,7 +281,12 @@ def extract(path: str) -> Extracted:
     if defaulted:
         notes.append("模板里没有" + "、".join(defaulted) + "，沿用默认要求")
 
-    lines = [by_role[r] for r in ORDER if r in by_role]
+    lines = [by_role[r] for r in ORDER if r in by_role and r not in TABLE_ROLES]
+    table_lines = [by_role[r] for r in TABLE_ROLES if r in by_role]
+    if table_lines:
+        # 表格默认保持原稿的样子，模板里的表格格式只作参考，用户去掉 # 才生效
+        lines.append("# 模板里表格的格式如下。表格默认保持原稿的样子；要改成模板这样，去掉下面几行开头的 #")
+        lines += ["# " + line for line in table_lines]
     latin_font = latin.most_common(1)[0][0] if latin else None
     if latin_font and latin_font.isascii():
         lines.append(f"英文、数字：{latin_font}")

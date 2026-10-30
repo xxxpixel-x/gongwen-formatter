@@ -8,10 +8,15 @@
     英文、数字：Times New Roman
     页边距：上37毫米，下35毫米，左28毫米，右26毫米
     页眉1.5厘米，页脚2.8厘米
+    表格标题：黑体，小四，居中
+    表头：黑体，小四
+    表格：仿宋_GB2312，小四
 
 冒号或括号前面是“段落类型”，后面是格式。没写的段落类型和没写的项
 都沿用默认要求（规范图片），正文的行距会被其他段落继承。看不懂的片段会原样报告出来，
 不会悄悄忽略。
+
+表格例外：默认保持原稿的样子；只有写了“表头”“表格”，才改写到的那几项，没写的项仍按原稿。
 """
 from __future__ import annotations
 
@@ -46,6 +51,23 @@ class Spec:
     header_mm: float | None = None    # 页眉距边界；None 表示不设置（Word 默认 12.7 毫米）
     footer_mm: float | None = None    # 页脚距边界
     problems: list[str] = field(default_factory=list)  # 没看懂的片段
+    # 表头、表格只改用户写到的项：{Role.TABLE: {"font", "size"}}；没写的表格类型不在里面
+    table_fields: dict[Role, set[str]] = field(default_factory=dict)
+
+
+class _Track:
+    """记下格式描述里设置了 Style 的哪些项。"""
+
+    def __init__(self, st: Style):
+        object.__setattr__(self, "_st", st)
+        object.__setattr__(self, "touched", set())
+
+    def __getattr__(self, name):
+        return getattr(self._st, name)
+
+    def __setattr__(self, name, value):
+        self.touched.add(name)
+        setattr(self._st, name, value)
 
 
 SIZE_NAMES = {
@@ -68,6 +90,9 @@ ROLE_NAMES = [
     ("附件名称", Role.ATTACH_ITEM), ("附件说明", Role.ATTACH_LABEL), ("附件", Role.ATTACH_LABEL),
     ("落款", Role.SIGNATURE), ("署名", Role.SIGNATURE), ("发文单位", Role.SIGNATURE),
     ("成文日期", Role.DATE), ("日期", Role.DATE),
+    ("表格标题行", Role.TABLE_HEAD), ("表格标题", Role.TABLE_CAPTION), ("表题", Role.TABLE_CAPTION),
+    ("表名", Role.TABLE_CAPTION), ("表头", Role.TABLE_HEAD), ("表格内容", Role.TABLE),
+    ("表格文字", Role.TABLE), ("表格正文", Role.TABLE), ("表格", Role.TABLE),
     ("正文", Role.BODY),
 ]
 
@@ -84,6 +109,7 @@ DEFAULT_TEXT = """\
 附件名称（仿宋_GB2312，三号，首行缩进2字符）
 落款（仿宋_GB2312，三号，右对齐，右缩进1字符）
 日期（仿宋_GB2312，三号，右对齐，右缩进1字符）
+表格标题（黑体，小四，居中，顶格）
 页边距：上37毫米，下35毫米，左28毫米，右26毫米
 """
 
@@ -212,7 +238,12 @@ def parse(text: str, with_defaults: bool = True) -> Spec:
             st = base
         else:
             st = copy.deepcopy(spec.styles.get(role) or _role_default(role, base))
-        _parse_attrs(attrs, st, problems, name)
+        if role in TABLE_ROLES:
+            track = _Track(st)
+            _parse_attrs(attrs, track, problems, name)
+            spec.table_fields.setdefault(role, set()).update(track.touched)
+        else:
+            _parse_attrs(attrs, st, problems, name)
         spec.styles[role] = st
 
     for role in Role:
@@ -232,6 +263,12 @@ def _role_default(role: Role, body: Style) -> Style:
         st.bold = True
     elif role in (Role.SIGNATURE, Role.DATE):
         st.align, st.first_indent, st.right_indent = "right", 0, 1
+    elif role == Role.TABLE_CAPTION:
+        st.align, st.first_indent, st.size = "center", 0, 12.0
+    elif role in TABLE_ROLES:
+        # 只有用户写到的项才会用上；“行距”没给数值时按单倍，不沿用正文的 28 磅
+        st.align, st.first_indent, st.right_indent = "center", 0, 0
+        st.line, st.line_multiple, st.size = None, 1.0, 12.0
     return st
 
 
@@ -253,9 +290,34 @@ def describe(st: Style) -> dict[str, str]:
     }
 
 
-DISPLAY_ROLES = [Role.TITLE, Role.SUBTITLE, Role.H1, Role.H2, Role.H3, Role.H4, Role.H5, Role.BODY,
-                 Role.ATTACH_LABEL, Role.ATTACH_ITEM, Role.SIGNATURE, Role.DATE]
+# Style 的项 → 解析结果表格的列
+FIELD_COLUMNS = {"font": "字体", "size": "字号", "bold": "加粗", "align": "对齐",
+                 "first_indent": "缩进", "right_indent": "缩进",
+                 "line": "行距", "line_multiple": "行距", "before": "行距", "after": "行距"}
+KEEP = "原稿"
+
+
+def describe_role(spec: Spec, role: Role) -> dict[str, str]:
+    """表头、表格没写到的项显示“原稿”（保持原样）；其他段落类型同 describe。"""
+    d = describe(spec.styles[role])
+    if role not in TABLE_ROLES:
+        return d
+    if not spec.table_fields.get(role):
+        return {k: KEEP for k in d}
+    cols = {FIELD_COLUMNS[f] for f in spec.table_fields[role]}
+    out = {k: (v if k in cols else KEEP) for k, v in d.items()}
+    if "加粗" in cols and not out["加粗"]:
+        out["加粗"] = "不加粗"
+    return out
+
+
+# 段落可以改成的类型（界面下拉框）；表格单元格的格式另外两类，不参与段落识别
+PARAGRAPH_ROLES = [Role.TITLE, Role.SUBTITLE, Role.H1, Role.H2, Role.H3, Role.H4, Role.H5, Role.BODY,
+                   Role.ATTACH_LABEL, Role.ATTACH_ITEM, Role.SIGNATURE, Role.DATE, Role.TABLE_CAPTION]
+TABLE_ROLES = (Role.TABLE_HEAD, Role.TABLE)
+DISPLAY_ROLES = PARAGRAPH_ROLES + list(TABLE_ROLES)
 
 
 def fonts_used(spec: Spec) -> set[str]:
-    return {spec.styles[r].font for r in DISPLAY_ROLES} | {spec.latin_font}
+    return {spec.styles[r].font for r in DISPLAY_ROLES
+            if r not in TABLE_ROLES or "font" in spec.table_fields.get(r, ())} | {spec.latin_font}
